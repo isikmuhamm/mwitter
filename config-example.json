@@ -1,0 +1,10 @@
+{
+  "disclaimer":"Delete the '-example' word from the file name before using it. You may delete this disclaimer as well.",
+  "email": "email@email.com",
+  "password": "passowrd",
+  "imap_server": "imap.server.email.com",
+  "poppler_path": "C:\\path\\to\\poppler\\bin",
+  "collected_uids": "",
+  "processed_uids": "",
+  "published_uids": ""
+}
