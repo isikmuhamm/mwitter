@@ -15,6 +15,24 @@ def load_config():
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def save_config(config):
+    config_path = Path("config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+def save_raw_content(uid, raw_content):
+    try:
+        raw_content_dir = Path("rawcontent")
+        raw_content_dir.mkdir(exist_ok=True)
+        
+        file_path = raw_content_dir / f"{uid}.eml"
+        with open(file_path, "wb") as f:
+            f.write(raw_content)
+        
+        logger.info(f"Ham içerik kaydedildi: {file_path}")
+    except Exception as e:
+        logger.error(f"Ham içerik kaydedilirken hata oluştu: {e}")
+
 def is_personal_email(msg, user_email):
     to_ = msg.get("To", "")
     cc_ = msg.get("Cc", "")
@@ -27,24 +45,19 @@ def collect_unread_mails(mail, config):
     status, messages = mail.uid('search', None, "UNSEEN")
     mail_ids = messages[0].split()
 
-    processed_mails_file = config["processed_mails_file"]
-    try:
-        with open(processed_mails_file, "r") as f:
-            processed_mails = set(f.read().splitlines())
-    except FileNotFoundError:
-        processed_mails = set()
-
     new_mails = []
+
+    # Collected UID'leri tek satırda almak için ayar
+    collected_uids = config.get("collected_uids", "").split(",")
 
     for mail_id in mail_ids:
         mail_id_str = mail_id.decode()
-        
-        if mail_id_str in processed_mails:
+
+        if mail_id_str in collected_uids:
             mail.uid('STORE', mail_id, '+FLAGS', '\\Seen')
             continue
 
         status, msg_data = mail.uid('fetch', mail_id, '(BODY.PEEK[])')
-        
         if status != 'OK':
             logger.warning(f"Mail ID {mail_id_str} için veri alınamadı")
             continue
@@ -57,12 +70,22 @@ def collect_unread_mails(mail, config):
 
         new_mails.append(mail_id_str)
 
-        with open(processed_mails_file, "a") as f:
-            f.write(mail_id_str + "\n")
+        # UID'yi config.json içine ekle (tek satır)
+        if collected_uids == [""]:
+            collected_uids = [mail_id_str]
+        else:
+            collected_uids.append(mail_id_str)
+
+        config["collected_uids"] = ",".join(collected_uids)
+        save_config(config)
+
+        # Ham içeriği kaydet
+        save_raw_content(mail_id_str, email_body)
 
         mail.uid('STORE', mail_id, '+FLAGS', '\\Seen')
 
     return new_mails
+
 
 def main():
     try:
