@@ -1,4 +1,5 @@
 import os
+import re
 import io
 import json
 import email
@@ -103,7 +104,7 @@ def get_mail_content(msg):
                 return
 
             if part.get('Content-Transfer-Encoding', '').lower() == 'quoted-printable':
-                content = quopri.decodestring(content)
+                content = quopri.decodestring(content).decode(charset, errors='ignore')
             elif part.get('Content-Transfer-Encoding', '').lower() == 'base64':
                 content = base64.b64decode(content)
             
@@ -169,12 +170,22 @@ class ImageProcessor:
 
     def process_pdf(self, file_path: str, uid: str):
         try:
-
+            logger.info(f"PDF işleniyor: {file_path}")
+            config = load_config()
             poppler_path = config.get("poppler_path", "")
-            images = convert_from_path(file_path, first_page=1, last_page=4)
+            logger.info(f"Kullanılan Poppler path: {poppler_path}")
+            
+            if not os.path.exists(file_path):
+                logger.error(f"PDF dosyası bulunamadı: {file_path}")
+                return []
+            
+            images = convert_from_path(file_path, first_page=1, last_page=4, poppler_path=poppler_path)
+            logger.info(f"Dönüştürülen sayfa sayısı: {len(images)}")
+            
             processed_files = []
             
             for i, image in enumerate(images):
+                logger.info(f"Sayfa {i+1} işleniyor...")
                 img_buffer = io.BytesIO()
                 image.save(img_buffer, format='JPEG')
                 img_data = img_buffer.getvalue()
@@ -182,14 +193,25 @@ class ImageProcessor:
                 file_path = self.process_single_image(img_data, uid, i, 'pdf_')
                 if file_path:
                     processed_files.append(file_path)
+                    logger.info(f"Sayfa {i+1} başarıyla işlendi ve kaydedildi: {file_path}")
+                else:
+                    logger.warning(f"Sayfa {i+1} işlenemedi veya kaydedilemedi.")
             
+            logger.info(f"PDF işleme tamamlandı. Toplam işlenen dosya sayısı: {len(processed_files)}")
             return processed_files
             
-        except PDFInfoNotInstalledError:
-            logger.error("Poppler yüklü değil veya PATH'te bulunamıyor.")
         except Exception as e:
             logger.error(f"PDF işlenirken hata oluştu: {e}")
+            logger.exception("Hata detayları:")
         return []
+
+def clean_filename(filename):
+    # Geçersiz karakterleri kaldır veya değiştir
+    cleaned = re.sub(r'[\r\n]+', ' ', filename)  # Satır sonlarını boşluklarla değiştir
+    cleaned = re.sub(r'[<>:"/\\|?*]', '_', cleaned)  # Diğer geçersiz karakterleri alt çizgi ile değiştir
+    cleaned = cleaned.strip()  # Baştaki ve sondaki boşlukları kaldır
+    return cleaned if cleaned else "nameless"  # Eğer isim boş kalırsa varsayılan bir isim ver
+
 
 def process_email_content(uid, output_dir):
     raw_content_dir = Path("rawcontent")
@@ -220,12 +242,28 @@ def process_email_content(uid, output_dir):
             processed_file = image_processor.process_single_image(content, uid, len(processed_files), 'img_')
             if processed_file:
                 processed_files.append(processed_file)
+                
         elif part.get_filename() and part.get_filename().lower().endswith('.pdf'):
-            temp_pdf_path = os.path.join(output_dir, f"temp_{part.get_filename()}")
-            with open(temp_pdf_path, 'wb') as f:
-                f.write(part.get_payload(decode=True))
-            processed_files.extend(image_processor.process_pdf(temp_pdf_path, uid))
-            os.remove(temp_pdf_path)
+            original_filename = part.get_filename()
+            clean_filename_result = clean_filename(original_filename)
+            temp_pdf_path = os.path.join(output_dir, f"temp_{clean_filename_result}")
+            
+            logger.info(f"PDF dosyası işleniyor: {original_filename}")
+            logger.info(f"Temizlenmiş dosya adı: {clean_filename_result}")
+            
+            try:
+                with open(temp_pdf_path, 'wb') as f:
+                    f.write(part.get_payload(decode=True))
+                
+                processed_files.extend(image_processor.process_pdf(temp_pdf_path, uid))
+            except Exception as e:
+                logger.error(f"PDF dosyası işlenirken hata oluştu: {e}")
+            finally:
+                if os.path.exists(temp_pdf_path):
+                    try:
+                        os.remove(temp_pdf_path)
+                    except Exception as e:
+                        logger.error(f"Geçici PDF dosyası silinirken hata oluştu: {e}")
     
     # Save processed content as JSON
     content_dir = Path(output_dir)
